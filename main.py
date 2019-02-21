@@ -1,6 +1,7 @@
+import re
 from time import time
 import pandas as pd
-from measure import Measure
+from scales import Scales
 
 
 def get_query(filename):
@@ -17,27 +18,54 @@ def get_query(filename):
 def get_translit(filename):
     filepath = 'infiles\\' + filename
     df = pd.read_csv(filepath, sep=';', dtype=str, error_bad_lines=False)
+    df['alias'] = df['alias'].replace('[\W_]+', ' ')
     ru_en_dict = df.set_index('alias')['brand'].to_dict()
 
     print('{} translit from {} loaded.'.format(len(ru_en_dict), filename))
     return ru_en_dict
 
 
-filename = '256-fixed-sampled-total.csv'
+def get_feed(filename):
+    filepath = 'infiles\\' + filename
+    text_list = open(filepath, 'r', encoding='utf-8').readlines()
+    text = ''
+    for line in text_list:
+        text += re.sub('<.+?>', ' ', line, flags=re.DOTALL) + '\n'
+    text = re.sub('ё', 'е', text)
+    feed_set = set()
+    for item in re.split('[\W_]+', text):
+        if item and \
+                not (re.match('full_', item) or
+                     re.fullmatch('\d+', item)):
+            feed_set.add(item.lower())
+
+    print('{} unique feed words from {} found.'.format(len(feed_set), filename))
+    return feed_set
+
+
+filename = '334-fixed.csv'
+feedfile = 'yandex_469070.php.xml'
+transfile_other = '334-translit.csv'
+transfile_full = '334-full.csv'
 outname = 'outfiles\\' + filename.split('-')[0] + '-trans-analysis.csv'
+
 fix_init_dict, fix_count_dict = get_query(filename)
-ru_en_brands = get_translit('256-brands-full.csv')
-# ru_en_brands = {}
-ru_en_unknownbrands_dict = get_translit('256-translit.csv')
-outfile = open(outname, 'w', encoding='utf-8')
+feed = get_feed(feedfile)
+ru_en_dict_other = get_translit(transfile_other)
+ru_en_dict_full = get_translit(transfile_full)
+ru_en_dict = {**ru_en_dict_other, **ru_en_dict_full}
 
-common_metrics_obj = Measure(fix_init_dict, ru_en_brands, ru_en_unknownbrands_dict)
+common_metrics_obj = Scales(fix_init_dict, ru_en_dict, feed)
 t = time()
-Measure.cycle(common_metrics_obj)
+Scales.collect_matches(common_metrics_obj)
 
-outfile.write('{}\t{}\t{}\t{}\t{}\n'.format('probability', 'fixed_query', 'eng_words', 'generated_translit', 'source'))
-for quadrum in common_metrics_obj.max_list:
-    outfile.write('\t'.join([str(elt) for elt in quadrum]) + '\n')
+outfile = open(outname, 'w', encoding='utf-8')
+outfile.write('{}\t{}\t{}\t{}\t{}\n'.format('weight', 'variant', 'ru_trans', 'eng_trans', 'init_query'))
+for candidate_tuple in common_metrics_obj.max_list:
+    outfile.write('\t'.join([str(elt) for elt in candidate_tuple]) + '\n')
 outfile.close()
 
-print('Process took {} seconds.'.format(round(time() - t, 2)))
+seconds = round(time() - t)
+print('Process took {0} minute{2} {1} seconds.'.format(seconds // 60,
+                                                       seconds % 60,
+                                                       '' if seconds // 60 == 1 else 's'))
